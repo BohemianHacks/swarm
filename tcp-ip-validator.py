@@ -1,178 +1,136 @@
 import tensorflow as tf
 import numpy as np
 import ipaddress
-from scapy.all import rdpcap, IP, TCP, Raw, HTTP
-import sklearn.model_selection
-import sklearn.preprocessing
-import re
-import hashlib
 import logging
+from typing import List, Tuple, Optional
 
-class TCPIPValidatorModel:
-    def __init__(self, packet_generator, pcap_file='generated_packets.pcap'):
-        """
-        Initialize validator model with advanced feature engineering
-        
-        Args:
-            packet_generator: Packet generation utility
-            pcap_file (str): Path to PCAP file for initial dataset
-        """
-        self.packet_generator = packet_generator
-        self.pcap_file = pcap_file
-        self.model = None
-        self.scaler = sklearn.preprocessing.StandardScaler()
-        logging.basicConfig(level=logging.INFO)
-        self.logger = logging.getLogger(__name__)
+class TCPIPPacketValidator:
+    """
+    Robust TCP/IP packet validation system with machine learning classification
+    """
     
-    def _extract_advanced_features(self, packet):
+    def __init__(self, 
+                 feature_config: Optional[dict] = None, 
+                 log_level: int = logging.INFO):
         """
-        Extract comprehensive, protocol-aware features
+        Initialize validator with configurable feature extraction
         
         Args:
-            packet (Scapy Packet): Packet to extract features from
+            feature_config (dict, optional): Custom feature extraction configuration
+            log_level (int): Logging verbosity level
+        """
+        # Logging setup
+        logging.basicConfig(
+            level=log_level,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        self.logger = logging.getLogger(self.__class__.__name__)
+        
+        # Default feature configuration
+        self.feature_config = feature_config or {
+            'ip_features': ['type', 'network'],
+            'tcp_features': ['ports', 'flags'],
+            'payload_features': ['length', 'entropy']
+        }
+        
+        # Model and preprocessing components
+        self.model = None
+        self.feature_scaler = None
+    
+    def extract_features(self, packet: dict) -> List[float]:
+        """
+        Extract standardized features from packet dictionary
+        
+        Args:
+            packet (dict): Preprocessed packet data
         
         Returns:
-            list: Advanced feature vector
+            List[float]: Extracted features
         """
         features = []
         
-        # IP Layer Features
-        if packet.haslayer(IP):
-            # IP Reputation-like Features
-            try:
-                src_ip = ipaddress.ip_address(packet[IP].src)
-                dst_ip = ipaddress.ip_address(packet[IP].dst)
-                
-                # IP Type Encoding
+        try:
+            # IP Feature Extraction
+            if 'type' in self.feature_config['ip_features']:
                 features.extend([
-                    int(src_ip.is_private),     # Source IP type
-                    int(dst_ip.is_private),     # Destination IP type
-                    int(src_ip.is_loopback),    # Source is loopback
-                    int(dst_ip.is_loopback)     # Destination is loopback
+                    float(packet.get('ip_src_private', 0)),
+                    float(packet.get('ip_dst_private', 0))
                 ])
-            except Exception:
-                features.extend([0, 0, 0, 0])
-        else:
-            features.extend([0, 0, 0, 0])
-        
-        # Transport Layer Features
-        if packet.haslayer(TCP):
-            # Advanced TCP Feature Engineering
-            features.extend([
-                packet[TCP].sport,              # Source Port
-                packet[TCP].dport,              # Destination Port
-                packet[TCP].flags,              # TCP Flags
-                int(packet[TCP].seq),           # Sequence Number
-                int(packet[TCP].ack)            # Acknowledgement Number
-            ])
-        else:
-            features.extend([0, 0, 0, 0, 0])
-        
-        # Payload Features with Protocol Insights
-        if packet.haslayer(Raw):
-            payload = packet[Raw].load
-            payload_str = payload.decode('utf-8', errors='ignore')
             
-            # HTTP-Specific Feature Engineering
-            http_methods = ['GET', 'POST', 'PUT', 'DELETE', 'HEAD', 'OPTIONS']
-            http_method_present = any(method in payload_str for method in http_methods)
+            if 'network' in self.feature_config['ip_features']:
+                # Network-level indicators
+                features.extend([
+                    float(packet.get('ip_src_network_score', 0)),
+                    float(packet.get('ip_dst_network_score', 0))
+                ])
             
-            features.extend([
-                len(payload),                   # Payload Length
-                sum(payload),                   # Payload Checksum
-                int(http_method_present),       # HTTP Method Presence
-                
-                # Entropy as feature for anomaly detection
-                self._calculate_entropy(payload),
-                
-                # Payload pattern matching
-                int(bool(re.search(r'HTTP/\d\.\d', payload_str))),  # HTTP Version Presence
-                int(bool(re.search(r'Host:', payload_str))),        # Host Header Presence
-            ])
-        else:
-            features.extend([0, 0, 0, 0, 0, 0])
+            # TCP Feature Extraction
+            if 'ports' in self.feature_config['tcp_features']:
+                features.extend([
+                    float(packet.get('tcp_sport', 0)),
+                    float(packet.get('tcp_dport', 0))
+                ])
+            
+            if 'flags' in self.feature_config['tcp_features']:
+                features.append(float(packet.get('tcp_flags', 0)))
+            
+            # Payload Feature Extraction
+            if 'length' in self.feature_config['payload_features']:
+                features.append(float(packet.get('payload_length', 0)))
+            
+            if 'entropy' in self.feature_config['payload_features']:
+                features.append(float(packet.get('payload_entropy', 0)))
+        
+        except Exception as e:
+            self.logger.error(f"Feature extraction error: {e}")
+            return [0.0] * 8  # Consistent default return
         
         return features
     
-    def _calculate_entropy(self, payload):
+    def preprocess_data(self, packets: List[dict]) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Calculate payload entropy as anomaly detection feature
+        Preprocess packet data for model training/inference
         
         Args:
-            payload (bytes): Raw packet payload
+            packets (List[dict]): List of preprocessed packet dictionaries
         
         Returns:
-            float: Entropy value
+            Tuple of feature matrix and labels
         """
         try:
-            # Count byte frequencies
-            byte_counts = {}
-            for byte in payload:
-                byte_counts[byte] = byte_counts.get(byte, 0) + 1
+            # Extract features
+            X = np.array([self.extract_features(packet) for packet in packets])
             
-            # Calculate entropy
-            total_bytes = len(payload)
-            entropy = 0
-            for count in byte_counts.values():
-                prob = count / total_bytes
-                entropy -= prob * np.log2(prob)
+            # Generate labels (simplified validation)
+            y = np.array([
+                1 if (
+                    packet.get('tcp_sport', 0) > 1024 and 
+                    packet.get('tcp_dport', 0) < 1024 and 
+                    packet.get('payload_length', 0) > 0
+                ) else 0 
+                for packet in packets
+            ])
             
-            return entropy
-        except Exception:
-            return 0
-    
-    def load_packets(self, max_packets=None):
-        """
-        Load packets and extract advanced features
-        
-        Args:
-            max_packets (int, optional): Limit number of packets processed
-        
-        Returns:
-            X (np.array): Feature matrix
-            y (np.array): Labels
-        """
-        try:
-            packets = rdpcap(self.pcap_file)
-            
-            if max_packets:
-                packets = packets[:max_packets]
-            
-            # Feature matrix and labels
-            X = []
-            y = []
-            
-            for packet in packets:
-                # Basic validation
-                if packet.haslayer(IP) and packet.haslayer(TCP):
-                    features = self._extract_advanced_features(packet)
-                    X.append(features)
-                    
-                    # Simple validation: consider packets with clear protocol markers as valid
-                    label = int(packet.haslayer(HTTP) or 
-                                any(method.encode() in packet[Raw].load for method in ['GET', 'POST']))
-                    y.append(label)
-            
-            return np.array(X), np.array(y)
+            return X, y
         
         except Exception as e:
-            self.logger.error(f"Packet loading error: {e}")
+            self.logger.error(f"Data preprocessing error: {e}")
             raise
     
-    def prepare_model(self, input_shape):
+    def create_model(self, input_shape: Tuple[int]) -> tf.keras.Model:
         """
-        Create neural network with focus on feature importance
+        Create standardized neural network model
         
         Args:
-            input_shape (tuple): Shape of input features
+            input_shape (Tuple[int]): Shape of input features
+        
+        Returns:
+            Compiled TensorFlow model
         """
         model = tf.keras.Sequential([
-            tf.keras.layers.Dense(64, activation='relu', input_shape=input_shape),
-            tf.keras.layers.BatchNormalization(),
-            tf.keras.layers.Dropout(0.3),
+            tf.keras.layers.Input(shape=input_shape),
             tf.keras.layers.Dense(32, activation='relu'),
-            tf.keras.layers.BatchNormalization(),
-            tf.keras.layers.Dropout(0.3),
+            tf.keras.layers.Dropout(0.2),
             tf.keras.layers.Dense(16, activation='relu'),
             tf.keras.layers.Dense(1, activation='sigmoid')
         ])
@@ -183,68 +141,99 @@ class TCPIPValidatorModel:
             metrics=['accuracy']
         )
         
-        self.model = model
+        return model
     
-    def train(self, test_size=0.2, random_state=42):
+    def train(self, 
+              training_data: List[dict], 
+              validation_split: float = 0.2,
+              epochs: int = 50) -> dict:
         """
-        Train the model with stratified sampling
+        Train packet validation model
         
         Args:
-            test_size (float): Proportion of dataset for testing
-            random_state (int): Reproducibility seed
+            training_data (List[dict]): Preprocessed packet data
+            validation_split (float): Proportion of data for validation
+            epochs (int): Number of training epochs
+        
+        Returns:
+            Training history dictionary
         """
-        X, y = self.load_packets()
-        
-        # Normalize features
-        X_scaled = self.scaler.fit_transform(X)
-        
-        # Stratified split
-        X_train, X_test, y_train, y_test = sklearn.model_selection.train_test_split(
-            X_scaled, y, 
-            test_size=test_size, 
-            random_state=random_state,
-            stratify=y
-        )
-        
-        # Prepare model architecture
-        self.prepare_model(input_shape=(X.shape[1],))
-        
-        # Train with early stopping
-        early_stop = tf.keras.callbacks.EarlyStopping(
-            monitor='val_loss', 
-            patience=10, 
-            restore_best_weights=True
-        )
-        
-        history = self.model.fit(
-            X_train, y_train,
-            validation_data=(X_test, y_test),
-            epochs=50,
-            batch_size=64,
-            callbacks=[early_stop],
-            verbose=1
-        )
-        
-        return history
-    
-    def convert_to_tflite(self, output_file='tcp_ip_validator.tflite'):
-        """
-        Convert to TensorFlow Lite with quantization
-        
-        Args:
-            output_file (str): Path for TensorFlow Lite model
-        """
-        converter = tf.lite.TFLiteConverter.from_keras_model(self.model)
-        converter.optimizations = [tf.lite.Optimize.DEFAULT]
-        converter.target_spec.supported_types = [tf.float16]
-        
         try:
-            tflite_model = converter.convert()
+            # Preprocess data
+            X, y = self.preprocess_data(training_data)
             
-            with open(output_file, 'wb') as f:
-                f.write(tflite_model)
+            # Normalize features
+            self.feature_scaler = tf.keras.preprocessing.sequence.pad_sequences(
+                X, padding='post', dtype='float32'
+            )
             
-            self.logger.info(f"TensorFlow Lite model saved to {output_file}")
+            # Create and train model
+            self.model = self.create_model(input_shape=(X.shape[1],))
+            
+            history = self.model.fit(
+                X, y,
+                validation_split=validation_split,
+                epochs=epochs,
+                callbacks=[
+                    tf.keras.callbacks.EarlyStopping(
+                        monitor='val_loss', 
+                        patience=5, 
+                        restore_best_weights=True
+                    )
+                ]
+            )
+            
+            return history.history
         
         except Exception as e:
-            self.logger.error(f"TensorFlow Lite conversion failed: {e}")
+            self.logger.error(f"Model training failed: {e}")
+            raise
+    
+    def evaluate(self, test_data: List[dict]) -> dict:
+        """
+        Evaluate model performance
+        
+        Args:
+            test_data (List[dict]): Test packet data
+        
+        Returns:
+            Evaluation metrics
+        """
+        if self.model is None:
+            raise ValueError("Model must be trained before evaluation")
+        
+        try:
+            X_test, y_test = self.preprocess_data(test_data)
+            
+            evaluation = self.model.evaluate(X_test, y_test, verbose=0)
+            
+            return {
+                'loss': evaluation[0],
+                'accuracy': evaluation[1]
+            }
+        
+        except Exception as e:
+            self.logger.error(f"Model evaluation failed: {e}")
+            raise
+    
+    def predict(self, packets: List[dict]) -> np.ndarray:
+        """
+        Predict packet validity
+        
+        Args:
+            packets (List[dict]): Packets to validate
+        
+        Returns:
+            Numpy array of predictions (0 or 1)
+        """
+        if self.model is None:
+            raise ValueError("Model must be trained before prediction")
+        
+        try:
+            X, _ = self.preprocess_data(packets)
+            predictions = self.model.predict(X)
+            return (predictions > 0.5).astype(int).flatten()
+        
+        except Exception as e:
+            self.logger.error(f"Prediction failed: {e}")
+            raise
