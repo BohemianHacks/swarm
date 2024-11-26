@@ -1,15 +1,17 @@
 import tensorflow as tf
 import numpy as np
 import ipaddress
-from scapy.all import rdpcap, IP, TCP, Raw
+from scapy.all import rdpcap, IP, TCP, Raw, HTTP
 import sklearn.model_selection
 import sklearn.preprocessing
+import re
+import hashlib
 import logging
 
 class TCPIPValidatorModel:
     def __init__(self, packet_generator, pcap_file='generated_packets.pcap'):
         """
-        Initialize validator model with packet generation and training capabilities
+        Initialize validator model with advanced feature engineering
         
         Args:
             packet_generator: Packet generation utility
@@ -22,9 +24,106 @@ class TCPIPValidatorModel:
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
     
+    def _extract_advanced_features(self, packet):
+        """
+        Extract comprehensive, protocol-aware features
+        
+        Args:
+            packet (Scapy Packet): Packet to extract features from
+        
+        Returns:
+            list: Advanced feature vector
+        """
+        features = []
+        
+        # IP Layer Features
+        if packet.haslayer(IP):
+            # IP Reputation-like Features
+            try:
+                src_ip = ipaddress.ip_address(packet[IP].src)
+                dst_ip = ipaddress.ip_address(packet[IP].dst)
+                
+                # IP Type Encoding
+                features.extend([
+                    int(src_ip.is_private),     # Source IP type
+                    int(dst_ip.is_private),     # Destination IP type
+                    int(src_ip.is_loopback),    # Source is loopback
+                    int(dst_ip.is_loopback)     # Destination is loopback
+                ])
+            except Exception:
+                features.extend([0, 0, 0, 0])
+        else:
+            features.extend([0, 0, 0, 0])
+        
+        # Transport Layer Features
+        if packet.haslayer(TCP):
+            # Advanced TCP Feature Engineering
+            features.extend([
+                packet[TCP].sport,              # Source Port
+                packet[TCP].dport,              # Destination Port
+                packet[TCP].flags,              # TCP Flags
+                int(packet[TCP].seq),           # Sequence Number
+                int(packet[TCP].ack)            # Acknowledgement Number
+            ])
+        else:
+            features.extend([0, 0, 0, 0, 0])
+        
+        # Payload Features with Protocol Insights
+        if packet.haslayer(Raw):
+            payload = packet[Raw].load
+            payload_str = payload.decode('utf-8', errors='ignore')
+            
+            # HTTP-Specific Feature Engineering
+            http_methods = ['GET', 'POST', 'PUT', 'DELETE', 'HEAD', 'OPTIONS']
+            http_method_present = any(method in payload_str for method in http_methods)
+            
+            features.extend([
+                len(payload),                   # Payload Length
+                sum(payload),                   # Payload Checksum
+                int(http_method_present),       # HTTP Method Presence
+                
+                # Entropy as feature for anomaly detection
+                self._calculate_entropy(payload),
+                
+                # Payload pattern matching
+                int(bool(re.search(r'HTTP/\d\.\d', payload_str))),  # HTTP Version Presence
+                int(bool(re.search(r'Host:', payload_str))),        # Host Header Presence
+            ])
+        else:
+            features.extend([0, 0, 0, 0, 0, 0])
+        
+        return features
+    
+    def _calculate_entropy(self, payload):
+        """
+        Calculate payload entropy as anomaly detection feature
+        
+        Args:
+            payload (bytes): Raw packet payload
+        
+        Returns:
+            float: Entropy value
+        """
+        try:
+            # Count byte frequencies
+            byte_counts = {}
+            for byte in payload:
+                byte_counts[byte] = byte_counts.get(byte, 0) + 1
+            
+            # Calculate entropy
+            total_bytes = len(payload)
+            entropy = 0
+            for count in byte_counts.values():
+                prob = count / total_bytes
+                entropy -= prob * np.log2(prob)
+            
+            return entropy
+        except Exception:
+            return 0
+    
     def load_packets(self, max_packets=None):
         """
-        Load packets from PCAP file and extract features with robust error handling
+        Load packets and extract advanced features
         
         Args:
             max_packets (int, optional): Limit number of packets processed
@@ -39,103 +138,30 @@ class TCPIPValidatorModel:
             if max_packets:
                 packets = packets[:max_packets]
             
-            features = []
-            labels = []
+            # Feature matrix and labels
+            X = []
+            y = []
             
             for packet in packets:
-                try:
-                    # Robust feature extraction with default values
-                    feature_vector = self._extract_packet_features(packet)
-                    features.append(feature_vector)
+                # Basic validation
+                if packet.haslayer(IP) and packet.haslayer(TCP):
+                    features = self._extract_advanced_features(packet)
+                    X.append(features)
                     
-                    # Labeling strategy with more nuanced evaluation
-                    label = self._evaluate_packet_validity(packet)
-                    labels.append(label)
-                
-                except Exception as e:
-                    self.logger.warning(f"Skipping packet due to error: {e}")
+                    # Simple validation: consider packets with clear protocol markers as valid
+                    label = int(packet.haslayer(HTTP) or 
+                                any(method.encode() in packet[Raw].load for method in ['GET', 'POST']))
+                    y.append(label)
             
-            return np.array(features), np.array(labels)
-        
-        except FileNotFoundError:
-            self.logger.error(f"PCAP file not found: {self.pcap_file}")
-            raise
-    
-    def _extract_packet_features(self, packet):
-        """
-        Extract robust features from packet with safe defaults
-        
-        Args:
-            packet (Scapy Packet): Packet to extract features from
-        
-        Returns:
-            list: Feature vector
-        """
-        # Safe attribute extraction with default values
-        ip_src_last_octet = int(packet[IP].src.split('.')[-1]) if packet.haslayer(IP) else 0
-        ip_dst_last_octet = int(packet[IP].dst.split('.')[-1]) if packet.haslayer(IP) else 0
-        ip_len = packet[IP].len if packet.haslayer(IP) else 0
-        
-        tcp_sport = packet[TCP].sport if packet.haslayer(TCP) else 0
-        tcp_dport = packet[TCP].dport if packet.haslayer(TCP) else 0
-        tcp_flags = packet[TCP].flags if packet.haslayer(TCP) else 0
-        
-        payload_len = len(packet[Raw].load) if packet.haslayer(Raw) else 0
-        payload_sum = sum(packet[Raw].load) if packet.haslayer(Raw) else 0
-        
-        return [
-            ip_src_last_octet,
-            ip_dst_last_octet,
-            ip_len,
-            tcp_sport,
-            tcp_dport,
-            tcp_flags,
-            payload_len,
-            payload_sum
-        ]
-    
-    def _evaluate_packet_validity(self, packet):
-        """
-        Determine packet validity with comprehensive checks
-        
-        Args:
-            packet (Scapy Packet): Packet to evaluate
-        
-        Returns:
-            int: Validity label (0 or 1)
-        """
-        try:
-            checks = [
-                # Valid IP range check
-                packet.haslayer(IP) and all([
-                    ipaddress.ip_address(packet[IP].src).is_private,
-                    ipaddress.ip_address(packet[IP].dst).is_private
-                ]),
-                
-                # Reasonable port numbers
-                packet.haslayer(TCP) and (
-                    1024 <= packet[TCP].sport <= 65535 and 
-                    1 <= packet[TCP].dport <= 1023
-                ),
-                
-                # Valid TCP flags
-                packet.haslayer(TCP) and 
-                packet[TCP].flags in [0x02, 0x10, 0x12, 0x18],
-                
-                # Payload sanity check
-                packet.haslayer(Raw) and 
-                (0 < len(packet[Raw].load) <= 1500)
-            ]
-            
-            return int(all(checks))
+            return np.array(X), np.array(y)
         
         except Exception as e:
-            self.logger.warning(f"Validity evaluation error: {e}")
-            return 0  # Conservative default
+            self.logger.error(f"Packet loading error: {e}")
+            raise
     
     def prepare_model(self, input_shape):
         """
-        Create TensorFlow neural network with flexible architecture
+        Create neural network with focus on feature importance
         
         Args:
             input_shape (tuple): Shape of input features
@@ -147,33 +173,32 @@ class TCPIPValidatorModel:
             tf.keras.layers.Dense(32, activation='relu'),
             tf.keras.layers.BatchNormalization(),
             tf.keras.layers.Dropout(0.3),
+            tf.keras.layers.Dense(16, activation='relu'),
             tf.keras.layers.Dense(1, activation='sigmoid')
         ])
         
         model.compile(
             optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
             loss='binary_crossentropy',
-            metrics=['accuracy', tf.keras.metrics.Precision(), tf.keras.metrics.Recall()]
+            metrics=['accuracy']
         )
         
         self.model = model
-        self.logger.info("Model architecture prepared successfully")
     
-    def train(self, test_size=0.2, random_state=42, max_packets=10000):
+    def train(self, test_size=0.2, random_state=42):
         """
-        Train the TCP/IP validator model with improved training strategy
+        Train the model with stratified sampling
         
         Args:
             test_size (float): Proportion of dataset for testing
             random_state (int): Reproducibility seed
-            max_packets (int): Maximum number of packets to process
         """
-        X, y = self.load_packets(max_packets)
+        X, y = self.load_packets()
         
         # Normalize features
         X_scaled = self.scaler.fit_transform(X)
         
-        # Stratified split to maintain label distribution
+        # Stratified split
         X_train, X_test, y_train, y_test = sklearn.model_selection.train_test_split(
             X_scaled, y, 
             test_size=test_size, 
@@ -184,18 +209,17 @@ class TCPIPValidatorModel:
         # Prepare model architecture
         self.prepare_model(input_shape=(X.shape[1],))
         
-        # Early stopping and model checkpointing
+        # Train with early stopping
         early_stop = tf.keras.callbacks.EarlyStopping(
             monitor='val_loss', 
             patience=10, 
             restore_best_weights=True
         )
         
-        # Train model
         history = self.model.fit(
             X_train, y_train,
             validation_data=(X_test, y_test),
-            epochs=100,
+            epochs=50,
             batch_size=64,
             callbacks=[early_stop],
             verbose=1
@@ -205,7 +229,7 @@ class TCPIPValidatorModel:
     
     def convert_to_tflite(self, output_file='tcp_ip_validator.tflite'):
         """
-        Convert trained model to TensorFlow Lite format with quantization
+        Convert to TensorFlow Lite with quantization
         
         Args:
             output_file (str): Path for TensorFlow Lite model
