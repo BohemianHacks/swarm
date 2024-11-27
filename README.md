@@ -1,7 +1,7 @@
 # **Swarm Intelligence**
 The proposed system represents a next-generation mesh network where intelligence is distributed across nodes, enabling dynamic, self-organizing network behavior.
 
-ESP32 swarm intelligence firmware:
+# ESP32 swarm intelligence firmware:
 **ESP-IDF Core Libraries:**
 - `freertos/FreeRTOS.h`: Real-time operating system for task management
 - `freertos/task.h`: Task creation and scheduling utilities
@@ -27,7 +27,7 @@ ESP32 swarm intelligence firmware:
 - TensorFlow Lite Micro (embedded version)
 - ARM Cortex-M optimized toolchain
 
-The key innovations include:
+# Key Innovations:
 
 1\. Adaptive Resource Discovery  
 The Resource Discovery Protocol provides a flexible mechanism for nodes to:  
