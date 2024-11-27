@@ -2,6 +2,62 @@
 The proposed system represents a next-generation mesh network where intelligence is distributed across nodes, enabling dynamic, self-organizing network behavior.
 
 # ESP32 swarm intelligence firmware:
+
+Compilation Instructions for ESP32 Swarm Intelligence Firmware:
+
+**Prerequisites:**
+1. Install ESP-IDF
+```bash
+# Clone ESP-IDF
+git clone --recursive https://github.com/espressif/esp-idf.git
+cd esp-idf
+./install.sh esp32
+source export.sh
+
+# Install TensorFlow Lite Micro
+git clone https://github.com/tensorflow/tflite-micro.git
+```
+
+**Project Setup:**
+```bash
+# Create project directory
+mkdir esp32_swarm_intelligence
+cd esp32_swarm_intelligence
+
+# Initialize ESP-IDF project
+esp-idf/tools/idf.py create-project swarm_node
+
+# Copy firmware source into project
+cp ../swarm_firmware.cpp components/swarm_node/src/
+
+# Configure project
+idf.py menuconfig
+```
+
+**Compilation Commands:**
+```bash
+# Build firmware
+idf.py build
+
+# Flash to ESP32
+idf.py flash
+
+# Monitor serial output
+idf.py monitor
+```
+
+**Toolchain Requirements:**
+- ESP-IDF toolchain
+- ARM GCC
+- Python 3.7+
+- CMake
+- Ninja build system
+
+Recommended additional configuration in `sdkconfig`:
+- Enable WiFi
+- Configure low-power modes
+- Set appropriate memory allocation
+
 **ESP-IDF Core Libraries:**
 - `freertos/FreeRTOS.h`: Real-time operating system for task management
 - `freertos/task.h`: Task creation and scheduling utilities
