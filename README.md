@@ -1,6 +1,33 @@
 # **Swarm Intelligence**
+The proposed system represents a next-generation mesh network where intelligence is distributed across nodes, enabling dynamic, self-organizing network behavior.
 
-The proposed system represents a next-generation mesh network where intelligence is distributed across nodes, enabling dynamic, self-organizing network behavior. The key innovations include:
+ESP32 swarm intelligence firmware:
+**ESP-IDF Core Libraries:**
+- `freertos/FreeRTOS.h`: Real-time operating system for task management
+- `freertos/task.h`: Task creation and scheduling utilities
+- `esp_now.h`: Peer-to-peer wireless communication protocol
+- `esp_wifi.h`: WiFi configuration and management
+- `nvs_flash.h`: Non-volatile storage for persistent configuration
+
+**TensorFlow Lite Micro Libraries:**
+- `tensorflow/lite/micro/micro_interpreter.h`: Lightweight TensorFlow interpreter
+- `tensorflow/lite/micro/micro_resolver.h`: Model resolver for TensorFlow Lite
+- `tensorflow/lite/schema/schema_generated.h`: TensorFlow model schema definitions
+
+**ESP32-Specific Headers:**
+- `esp_timer.h`: High-resolution timer functions
+- `esp_mac.h`: MAC address retrieval utilities
+
+**Standard C++ Libraries:**
+- `<cstring>`: Memory manipulation functions (memcpy)
+- `<cstdint>`: Fixed-width integer types
+
+**Compilation Requirements:**
+- ESP-IDF v4.4 or later
+- TensorFlow Lite Micro (embedded version)
+- ARM Cortex-M optimized toolchain
+
+The key innovations include:
 
 1\. Adaptive Resource Discovery  
 The Resource Discovery Protocol provides a flexible mechanism for nodes to:  
